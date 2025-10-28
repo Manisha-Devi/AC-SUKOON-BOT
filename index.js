@@ -1,6 +1,6 @@
 const express = require('express');
-const qrcodeTerminal = require('qrcode-terminal'); // For logs
-const qrcodeLib = require('qrcode'); // For generating web-friendly QR image (Data URL)
+const qrcodeTerminal = require('qrcode-terminal'); // For terminal logs
+const qrcodeLib = require('qrcode'); // For generating web-friendly QR image
 const { Client, LocalAuth } = require('whatsapp-web.js');
 require('dotenv').config();
 
@@ -18,7 +18,6 @@ function getBotResponse(message) {
     if (text === 'hi' || text === 'hello') {
         return 'Hello there! Send me !help to see what I can do. (Reply from Render bot)';
     }
-    // ... (rest of your bot logic remains the same)
     if (text === '!status' || text.includes('online')) {
         return 'I am online and running on the Render server (non-persistent session).';
     }
@@ -38,6 +37,7 @@ function getBotResponse(message) {
     return "I received your message, but I only understand specific commands. Send *!help* to see what I can do.";
 }
 // --------------------------------------------------------
+
 
 // --- 1. Client Initialization with Enhanced Robustness and Timeouts ---
 client = new Client({
@@ -67,7 +67,7 @@ client.on('qr', (qr) => {
     // 2. Also generate QR in terminal/logs (for debugging)
     qrcodeTerminal.generate(qr, { small: true });
     console.log('--- QR RECEIVED ---');
-    console.log('SCAN CODE via /get-qr endpoint or check logs.');
+    console.log('SCAN CODE via /get-qr endpoint OR check the homepage (/).');
 });
 
 client.on('ready', () => {
@@ -98,8 +98,69 @@ client.initialize();
 // --- 3. Express Server Routes (For Status, Health Check, and QR Code) ---
 
 /**
- * 🚀 New Endpoint to get the QR code as a Data URL (Image) or String.
- * This is useful for displaying the QR on a web page or mobile app.
+ * 🏠 Home Route: Displays status and embeds the QR code image if authentication is needed.
+ * This remains the human-friendly visual status page.
+ */
+app.get('/', async (req, res) => {
+    let status = client && client.info ? `Ready (Connected as ${client.info.pushname})` : 'Initializing/Waiting for QR Scan';
+    let qrHtml = '';
+
+    if (qrCodeString) {
+        // Only generate QR HTML if the QR string is available
+        try {
+            // Generate the Base64 Data URL
+            const qrImage = await qrcodeLib.toDataURL(qrCodeString);
+            
+            qrHtml = `
+                <div style="margin: 20px auto; padding: 20px; border: 2px dashed #FF9800; max-width: 300px; text-align: center; border-radius: 10px; background-color: #fffaf0;">
+                    <h2 style="color: #FF5722;">Scan to Connect</h2>
+                    <img src="${qrImage}" alt="QR Code" style="width: 250px; height: 250px; border-radius: 5px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+                    <p style="color: #333; margin-top: 15px; font-weight: bold;">Session is not authenticated. Please scan the QR code using your phone's linked device feature.</p>
+                </div>
+            `;
+            status = 'Waiting for QR Scan (Image Displayed)';
+        } catch (error) {
+            console.error('Error generating QR code Data URL for home page:', error);
+            qrHtml = '<p style="color: red;">Error displaying QR code. Check logs.</p>';
+        }
+    }
+    
+    res.send(`
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>WhatsApp Bot Status</title>
+            <style>
+                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; padding-top: 20px; background-color: #e8f5e9; }
+                .container { max-width: 600px; margin: 0 auto; background-color: white; padding: 30px; border-radius: 12px; box-shadow: 0 6px 20px rgba(0,0,0,0.15); }
+                h1 { color: #128C7E; font-size: 2em; }
+                .status-ready { color: #25D366; font-weight: bold; font-size: 1.2em; }
+                .status-wait { color: #FF9800; font-weight: bold; font-size: 1.2em; }
+                a { color: #128C7E; text-decoration: none; }
+                a:hover { text-decoration: underline; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>WhatsApp Chatbot Status</h1>
+                <p class="${client && client.info ? 'status-ready' : 'status-wait'}">Status: ${status}</p>
+                
+                ${qrHtml}
+
+                <p style="margin-top: 30px; font-size: 0.9em; color: #666;"><b>⚠️ WARNING:</b> This service is using a non-persistent session. Re-authentication is required after every service restart.</p>
+                <p style="font-size: 0.9em; color: #666;">Raw QR data is available at: <b><a href="/get-qr">/get-qr</a></b></p>
+            </div>
+        </body>
+        </html>
+    `);
+});
+
+
+/**
+ * 📈 API Endpoint for Health Check and Raw QR Data
+ * This is the dedicated API route that returns JSON data.
  */
 app.get('/get-qr', async (req, res) => {
     if (client.info) {
@@ -112,7 +173,7 @@ app.get('/get-qr', async (req, res) => {
             // Generate a Data URL (Base64 Image) from the QR string
             const qrImage = await qrcodeLib.toDataURL(qrCodeString);
             
-            // Send the Data URL in the response
+            // Send the Data URL in the response (as JSON)
             return res.status(200).json({
                 status: 'waiting_for_scan',
                 qr_code_data_url: qrImage, // Use this in an <img> tag src=""
@@ -128,16 +189,10 @@ app.get('/get-qr', async (req, res) => {
     }
 });
 
-app.get('/', (req, res) => {
-    let status = client && client.info ? `Ready (Connected as ${client.info.pushname})` : 'Initializing/Waiting for QR Scan';
-    res.send(`
-        <h1>WhatsApp Chatbot Status: ${status}</h1>
-        <p><b>⚠️ WARNING:</b> This service is using a non-persistent session. You must authenticate after every service restart.</p>
-        <p>Check the logs or use the API endpoint: <b><a href="/get-qr">/get-qr</a></b></p>
-    `);
+// Critical health check endpoint to keep the service awake
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
 });
-
-
 
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
