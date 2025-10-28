@@ -7,6 +7,13 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// --- CONFIGURATION ---
+// IMPORTANT: This number is the ONLY number the bot will respond to (for incoming messages).
+// Format must be '91XXXXXXXXXX@c.us'
+const ALLOWED_NUMBER = '918493090932@c.us'; 
+// The raw number ID expected to scan the QR code and link the device.
+const EXPECTED_BOT_NUMBER_ID = '918493090932'; 
+
 // Global variable to store QR code string temporarily
 let qrCodeString = null; 
 let client;
@@ -67,11 +74,26 @@ client.on('qr', (qr) => {
     // 2. Also generate QR in terminal/logs (for debugging)
     qrcodeTerminal.generate(qr, { small: true });
     console.log('--- QR RECEIVED ---');
-    console.log('SCAN CODE via /get-qr endpoint OR check the homepage (/).');
+    console.log(`SCAN CODE via /get-qr endpoint OR check the homepage (/) using number: ${EXPECTED_BOT_NUMBER_ID}`);
 });
 
 client.on('ready', () => {
-    console.log('✅ Client is ready! WhatsApp session established.');
+    const connectedNumberId = client.info.wid.user;
+
+    // --- CRITICAL CHECK: Verify the connected number ---
+    if (connectedNumberId !== EXPECTED_BOT_NUMBER_ID) {
+        console.error(`--- CRITICAL ERROR ---`);
+        console.error(`WRONG NUMBER CONNECTED! Expected: ${EXPECTED_BOT_NUMBER_ID}, Actual: ${connectedNumberId}`);
+        console.error(`Logging out immediately. Please scan QR with the correct number.`);
+        
+        // Log out immediately to force re-scan with the correct number
+        client.logout();
+        qrCodeString = null; 
+        return; 
+    }
+    // --- END CRITICAL CHECK ---
+
+    console.log('✅ Client is ready! WhatsApp session established with the CORRECT number.');
     qrCodeString = null; // Clear the QR string once connected
 });
 
@@ -80,10 +102,25 @@ client.on('auth_failure', (msg) => {
     qrCodeString = null;
 });
 
+// --- Handle Disconnection/Logout ---
+client.on('disconnected', (reason) => {
+    console.log('🛑 Client Disconnected! Reason:', reason);
+    qrCodeString = null; // Ensure QR code is nullified to reflect disconnected state
+});
+
+
 // --- CORE CHATBOT LOGIC IMPLEMENTATION ---
 client.on('message', message => {
     if (message.fromMe || message.isStatus) return;
 
+    // --- RESTRICT BOT TO ALLOWED_NUMBER ONLY (Incoming Message Filter) ---
+    if (message.from !== ALLOWED_NUMBER) {
+        console.log(`[BLOCKED] Message from unauthorized number: ${message.from}`);
+        // Send a rejection message to the unauthorized user
+        client.sendMessage(message.from, "🚫 I am configured to respond only to the administrator's number and cannot process your request.");
+        return; 
+    }
+    
     if (message.body) {
         console.log(`[INCOMING] from ${message.from}: ${message.body}`);
         const botResponse = getBotResponse(message.body);
@@ -102,6 +139,7 @@ client.initialize();
  * This remains the human-friendly visual status page.
  */
 app.get('/', async (req, res) => {
+    // Status check relies on client.info, which is cleared on disconnect
     let status = client && client.info ? `Ready (Connected as ${client.info.pushname})` : 'Initializing/Waiting for QR Scan';
     let qrHtml = '';
 
@@ -138,6 +176,7 @@ app.get('/', async (req, res) => {
                 h1 { color: #128C7E; font-size: 2em; }
                 .status-ready { color: #25D366; font-weight: bold; font-size: 1.2em; }
                 .status-wait { color: #FF9800; font-weight: bold; font-size: 1.2em; }
+                .config-note { color: #128C7E; margin-top: 20px; font-size: 0.9em; font-weight: bold; }
                 a { color: #128C7E; text-decoration: none; }
                 a:hover { text-decoration: underline; }
             </style>
@@ -148,6 +187,10 @@ app.get('/', async (req, res) => {
                 <p class="${client && client.info ? 'status-ready' : 'status-wait'}">Status: ${status}</p>
                 
                 ${qrHtml}
+                
+                <p class="config-note">
+                    Bot is configured to respond ONLY to: <b>${ALLOWED_NUMBER.replace('@c.us', '')}</b>
+                </p>
 
                 <p style="margin-top: 30px; font-size: 0.9em; color: #666;"><b>⚠️ WARNING:</b> This service is using a non-persistent session. Re-authentication is required after every service restart.</p>
                 <p style="font-size: 0.9em; color: #666;">Raw QR data is available at: <b><a href="/get-qr">/get-qr</a></b></p>
