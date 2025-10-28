@@ -7,29 +7,23 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// --- CONFIGURATION ---
-// IMPORTANT: This number is the ONLY number the bot will respond to (for incoming messages).
-// Format must be '91XXXXXXXXXX@c.us'
-const ALLOWED_NUMBER = '918493090932@c.us'; 
-// The raw number ID expected to scan the QR code and link the device.
-const EXPECTED_BOT_NUMBER_ID = '918493090932'; 
-
-// Global variable to store QR code string temporarily
+// Global variables
 let qrCodeString = null; 
-let client;
+let client = null; // Initialize as null
 
 // --- Simple Bot Logic Function (The Chatbot Engine) ---
+// This function prepares the bot's response based on the incoming message.
 function getBotResponse(message) {
     const text = message.toLowerCase().trim();
 
     if (text === 'hi' || text === 'hello') {
-        return 'Hello there! Send me !help to see what I can do. (Reply from Render bot)';
+        return 'Hello! I am a general WhatsApp bot. Send me !help to see what I can do.';
     }
     if (text === '!status' || text.includes('online')) {
-        return 'I am online and running on the Render server (non-persistent session).';
+        return 'I am online and running on the Render server.';
     }
     if (text === '!time') {
-        return `The current server time is ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} (IST).`;
+        return `The current server time is: ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} (IST).`;
     }
     if (text.includes('thanks') || text.includes('thank you')) {
         return 'You\'re welcome! Happy to assist.';
@@ -41,106 +35,114 @@ function getBotResponse(message) {
                 '- *!time*: Get the current server time.\n' +
                 '- *!help*: Show this list.';
     }
-    return "I received your message, but I only understand specific commands. Send *!help* to see what I can do.";
+    return "I received your message, but I only understand specific commands. Can you send *!help*?";
 }
 // --------------------------------------------------------
 
 
-// --- 1. Client Initialization with Enhanced Robustness and Timeouts ---
-client = new Client({
-    authStrategy: new LocalAuth({ clientId: "whatsapp-chatbot-id" }),
-    // Added robust settings to fix potential ERR_TIMED_OUT issue
-    authTimeoutMs: 60000, 
-    qrTimeoutMs: 30000,
-    puppeteer: {
-        headless: true,
-        args: [
-            '--no-sandbox', 
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-video-decode',
-            '--disable-gpu',
-            '--unhandled-rejections=strict',
-        ],
-    },
-});
-
-// --- 2. WhatsApp Client Listeners ---
-
-client.on('qr', (qr) => {
-    // 1. Store the raw QR code string globally
-    qrCodeString = qr; 
+// --- Client Initialization and Event Listener Setup ---
+function initializeWhatsAppClient() {
+    console.log('--- Initializing/Re-initializing WhatsApp Client ---');
     
-    // 2. Also generate QR in terminal/logs (for debugging)
-    qrcodeTerminal.generate(qr, { small: true });
-    console.log('--- QR RECEIVED ---');
-    console.log(`SCAN CODE via /get-qr endpoint OR check the homepage (/) using number: ${EXPECTED_BOT_NUMBER_ID}`);
-});
+    // 1. Create a new client instance
+    client = new Client({
+        authStrategy: new LocalAuth({ clientId: "whatsapp-chatbot-id" }),
+        // Increased timeouts to 120 seconds (2 minutes) for stability
+        authTimeoutMs: 120000, 
+        qrTimeoutMs: 120000,
+        puppeteer: {
+            headless: true,
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-video-decode',
+                '--disable-gpu',
+                '--unhandled-rejections=strict',
+                // FIX: Added flags for improved stability and resource management in headless mode
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--incognito', 
+                '--single-process', // Use single-process to reduce overhead
+                '--no-zygote',
+            ],
+        },
+    });
 
-client.on('ready', () => {
-    const connectedNumberId = client.info.wid.user;
+    // 2. Attach Listeners
 
-    // --- CRITICAL CHECK: Verify the connected number ---
-    if (connectedNumberId !== EXPECTED_BOT_NUMBER_ID) {
-        console.error(`--- CRITICAL ERROR ---`);
-        console.error(`WRONG NUMBER CONNECTED! Expected: ${EXPECTED_BOT_NUMBER_ID}, Actual: ${connectedNumberId}`);
-        console.error(`Logging out immediately. Please scan QR with the correct number.`);
+    client.on('qr', (qr) => {
+        // 1. Store the raw QR code string globally
+        qrCodeString = qr; 
         
-        // Log out immediately to force re-scan with the correct number
-        client.logout();
-        qrCodeString = null; 
-        return; 
-    }
-    // --- END CRITICAL CHECK ---
+        // 2. Also generate QR in terminal/logs (for debugging)
+        qrcodeTerminal.generate(qr, { small: true });
+        console.log('--- QR RECEIVED ---');
+        console.log('Scan the QR code via the /get-qr endpoint or the homepage (/).');
+    });
 
-    console.log('✅ Client is ready! WhatsApp session established with the CORRECT number.');
-    qrCodeString = null; // Clear the QR string once connected
-});
+    client.on('ready', () => {
+        console.log('✅ Client is ready! WhatsApp session successfully established.');
+        qrCodeString = null; // Clear the QR string after connection
+    });
 
-client.on('auth_failure', (msg) => {
-    console.error('❌ AUTHENTICATION FAILURE', msg);
-    qrCodeString = null;
-});
+    client.on('auth_failure', (msg) => {
+        console.error('❌ AUTHENTICATION FAILURE', msg);
+        qrCodeString = null;
+    });
 
-// --- Handle Disconnection/Logout ---
-client.on('disconnected', (reason) => {
-    console.log('🛑 Client Disconnected! Reason:', reason);
-    qrCodeString = null; // Ensure QR code is nullified to reflect disconnected state
-});
+    // --- FIX: Handle Disconnection/Logout gracefully with destruction and re-initialization ---
+    client.on('disconnected', async (reason) => {
+        console.log('🛑 Client Disconnected! Reason:', reason);
+        qrCodeString = null; // Ensures the status correctly shows disconnected
+
+        // CRITICAL FIX: Destroy the existing client to release the Chromium process and file locks (EBUSY fix)
+        try {
+            console.log('⏳ Attempting to gracefully destroy previous client instance to release file locks...');
+            await client.destroy();
+            console.log('✅ Previous client destroyed.');
+        } catch (e) {
+             // Log error but proceed, as the file lock might be the reason destroy failed
+            console.error('⚠️ Error during client destruction (Expected EBUSY fix):', e.message);
+        }
+
+        // Re-initialize the client to force the generation of a new QR code.
+        console.log('🔄 Re-initializing client to generate new QR code...');
+        // Wait period to ensure resources are cleared before restarting Puppeteer
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        initializeWhatsAppClient(); 
+    });
 
 
-// --- CORE CHATBOT LOGIC IMPLEMENTATION ---
-client.on('message', message => {
-    if (message.fromMe || message.isStatus) return;
+    // --- Core Chatbot Logic (Accepts messages from all numbers) ---
+    client.on('message', message => {
+        if (message.fromMe || message.isStatus) return;
 
-    // --- RESTRICT BOT TO ALLOWED_NUMBER ONLY (Incoming Message Filter) ---
-    if (message.from !== ALLOWED_NUMBER) {
-        console.log(`[BLOCKED] Message from unauthorized number: ${message.from}`);
-        // Send a rejection message to the unauthorized user
-        client.sendMessage(message.from, "🚫 I am configured to respond only to the administrator's number and cannot process your request.");
-        return; 
-    }
+        if (message.body) {
+            console.log(`[INCOMING] from ${message.from}: ${message.body}`);
+            const botResponse = getBotResponse(message.body);
+            client.sendMessage(message.from, botResponse);
+        }
+    });
+    // ----------------------------------------
     
-    if (message.body) {
-        console.log(`[INCOMING] from ${message.from}: ${message.body}`);
-        const botResponse = getBotResponse(message.body);
-        client.sendMessage(message.from, botResponse);
-    }
-});
-// ----------------------------------------
+    // 3. Start the client process
+    client.initialize();
+}
+// ------------------------------------------------------------------
 
-client.initialize();
+// Start the WhatsApp client for the first time
+initializeWhatsAppClient();
 
 
 // --- 3. Express Server Routes (For Status, Health Check, and QR Code) ---
 
 /**
  * 🏠 Home Route: Displays status and embeds the QR code image if authentication is needed.
- * This remains the human-friendly visual status page.
  */
 app.get('/', async (req, res) => {
     // Status check relies on client.info, which is cleared on disconnect
-    let status = client && client.info ? `Ready (Connected as ${client.info.pushname})` : 'Initializing/Waiting for QR Scan';
+    let status = client && client.info ? `Ready (Connected as: ${client.info.pushname})` : 'Initializing/Waiting for QR Scan';
     let qrHtml = '';
 
     if (qrCodeString) {
@@ -176,7 +178,6 @@ app.get('/', async (req, res) => {
                 h1 { color: #128C7E; font-size: 2em; }
                 .status-ready { color: #25D366; font-weight: bold; font-size: 1.2em; }
                 .status-wait { color: #FF9800; font-weight: bold; font-size: 1.2em; }
-                .config-note { color: #128C7E; margin-top: 20px; font-size: 0.9em; font-weight: bold; }
                 a { color: #128C7E; text-decoration: none; }
                 a:hover { text-decoration: underline; }
             </style>
@@ -188,12 +189,8 @@ app.get('/', async (req, res) => {
                 
                 ${qrHtml}
                 
-                <p class="config-note">
-                    Bot is configured to respond ONLY to: <b>${ALLOWED_NUMBER.replace('@c.us', '')}</b>
-                </p>
-
                 <p style="margin-top: 30px; font-size: 0.9em; color: #666;"><b>⚠️ WARNING:</b> This service is using a non-persistent session. Re-authentication is required after every service restart.</p>
-                <p style="font-size: 0.9em; color: #666;">Raw QR data is available at: <b><a href="/get-qr">/get-qr</a></b></p>
+                <p style="font-size: 0.9em; color: #666;">Raw QR data is available here: <b><a href="/get-qr">/get-qr</a></b></p>
             </div>
         </body>
         </html>
@@ -216,11 +213,11 @@ app.get('/get-qr', async (req, res) => {
             // Generate a Data URL (Base64 Image) from the QR string
             const qrImage = await qrcodeLib.toDataURL(qrCodeString);
             
-            // Send the Data URL in the response (as JSON)
+            // Return the Data URL in the response (as JSON)
             return res.status(200).json({
                 status: 'waiting_for_scan',
                 qr_code_data_url: qrImage, // Use this in an <img> tag src=""
-                qr_code_string: qrCodeString, // The raw string 
+                qr_code_string: qrCodeString, // The raw string
                 message: 'Scan the QR code to authenticate the WhatsApp session.'
             });
         } catch (error) {
