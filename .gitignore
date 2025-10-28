@@ -1,0 +1,33 @@
+# --- Dependencies and Compilation ---
+/node_modules
+/dist
+/build
+/lib
+
+# --- IDE and OS Files ---
+# Mac
+.DS_Store
+# Windows
+Thumbs.db
+
+# --- Environment and Configuration Files ---
+# CRITICAL: Keep your secret keys and environment variables out of the repository.
+.env
+.env.*
+
+# --- WhatsApp-Web.js Session and Cache Files ---
+# CRITICAL: Never commit session data!
+**.wwebjs_auth** # Default session folder
+**whatsapp-chatbot-id/** # Custom session folder used in your code
+/sessions/
+/LocalAuth/
+**.wwebjs_cache** # Temporary cache files (the one you asked about)
+
+# --- Logging and Debugging ---
+npm-debug.log*
+yarn-debug.log*
+*.log
+.pnp.*
+
+# --- Puppeteer/Chromium Cache ---
+.cache
